@@ -1,0 +1,50 @@
+{
+  "name": "express-websocket-proxy",
+  "version": "1.4.0",
+  "description": "recieves requests though express and sends them through a websocket to the target client",
+  "main": "./dist/index.js",
+  "typings": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "keywords": [],
+  "scripts": {
+    "start": "node ./dist/index.js",
+    "debug": "node ./dist/index.js --debug --no-cluster",
+    "client": "node ./scripts/test_client.js",
+    "build": "npm run clean && npx tsc",
+    "watch": "npm run clean && npx tsc --watch",
+    "pretty": "npx prettier --write .",
+    "clean": "node ./scripts/clean.js"
+  },
+  "author": "Oyintare Ebelo",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.2.2",
+    "better-sqlite3": "^8.0.1",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.5.2",
+    "socket.io-client": "^4.5.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.17.12",
+    "@babel/eslint-parser": "^7.17.0",
+    "@babel/node": "^7.15.4",
+    "@types/better-sqlite3": "^7.6.3",
+    "@types/express": "^4.17.15",
+    "@types/node": "^17.0.34",
+    "@types/uuid": "^9.0.0",
+    "@typescript-eslint/eslint-plugin": "^5.24.0",
+    "@typescript-eslint/parser": "^5.24.0",
+    "eslint": "^8.15.0",
+    "eslint-config-prettier": "^8.5.0",
+    "eslint-config-standard": "^17.0.0",
+    "eslint-plugin-import": "^2.26.0",
+    "eslint-plugin-n": "^15.2.0",
+    "eslint-plugin-promise": "^6.0.0",
+    "prettier": "2.7.1",
+    "typescript": "^4.9.3"
+  }
+}
