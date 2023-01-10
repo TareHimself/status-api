@@ -27,7 +27,6 @@ app.use(cors());
 
 app.get('/', (req, res) => {
 	res.send("YOLO")
-	sendToPingClass<EIpcOps.DEBUG>({ op: EIpcOps.DEBUG, d: "EXAMPLE MESSAGE" })
 })
 
 app.get('/status', (req, res) => {
