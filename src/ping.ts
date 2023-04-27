@@ -6,88 +6,91 @@ import { EIpcOps, IIpcEvents, IIpcMessage, IStatusAppPingInfo } from './types';
 const PING_TIMEOUT = 5 * 60 * 1000;
 
 export class Ping {
+	appsToUrls: { [key: string]: string };
+	appsToTimers: { [key: string]: ReturnType<typeof setTimeout> };
 
-    appsToUrls: { [key: string]: string };
-    appsToTimers: { [key: string]: ReturnType<typeof setTimeout> };
+	constructor() {
+		this.appsToTimers = {};
+		this.appsToUrls = {};
 
-    constructor() {
-        this.appsToTimers = {}
-        this.appsToUrls = {}
+		cluster.on('fork', (worker) => {
+			worker.on('message', this.onWorkerMessage.bind(this));
+		});
 
+		cluster.on('exit', (worker, code) => {
+			worker.off('message', this.onWorkerMessage.bind(this));
 
-        cluster.on('fork', (worker) => {
-            worker.on('message', this.onWorkerMessage.bind(this))
-        })
+			if (code !== 0 && !worker.exitedAfterDisconnect) {
+				cluster.fork();
+			}
+		});
 
-        cluster.on("exit", (worker, code) => {
-            worker.off('message', this.onWorkerMessage.bind(this))
+		getAppsToPing().forEach((a) => {
+			this.addAppToPingItems(a);
+		});
+	}
 
-            if (code !== 0 && !worker.exitedAfterDisconnect) {
-                cluster.fork();
-            }
-        });
+	async deriveStatus(appId: string) {
+		if (this.appsToTimers[appId]) {
+			delete this.appsToTimers[appId];
+		}
 
-        getAppsToPing().forEach((a) => {
-            this.addAppToPingItems(a);
-        })
-    }
+		try {
+			const start = Date.now();
+			const res = await axios.head(this.appsToUrls[appId], {
+				validateStatus: () => true,
+			});
+			if (res.status === HttpStatusCode.Ok) {
+				tInsertStatus(appId, Date.now() - start, 1);
+			} else {
+				tInsertStatus(appId, Date.now() - start, 0);
+			}
+		} catch (e) {
+			tInsertStatus(appId, -1, 0);
+		}
 
-    async deriveStatus(appId: string) {
-        if (this.appsToTimers[appId]) {
-            delete this.appsToTimers[appId];
-        }
+		this.appsToTimers[appId] = setTimeout(
+			this.deriveStatus.bind(this),
+			PING_TIMEOUT,
+			appId
+		);
+	}
 
-        try {
-            const start = Date.now();
-            const res = await axios.head(this.appsToUrls[appId], { validateStatus: () => true, });
-            if (res.status === HttpStatusCode.Ok) {
-                tInsertStatus(appId, Date.now() - start, 1)
-            }
-            else {
-                tInsertStatus(appId, Date.now() - start, 0)
-            }
-        } catch (e) {
-            tInsertStatus(appId, -1, 0);
-        }
+	addAppToPingItems(app: IIpcEvents[EIpcOps.ADD]) {
+		if (this.appsToTimers[app.id]) {
+			clearTimeout(this.appsToTimers[app.id]);
+		}
+		this.appsToUrls[app.id] = app.url;
+		this.deriveStatus(app.id);
+	}
 
-        this.appsToTimers[appId] = setTimeout(this.deriveStatus.bind(this), PING_TIMEOUT, appId)
-    }
+	removeAppFromPingItems(appId: IIpcEvents[EIpcOps.REMOVE]) {
+		if (this.appsToTimers[appId]) {
+			clearTimeout(this.appsToTimers[appId]);
+			delete this.appsToTimers[appId];
+		}
 
-    addAppToPingItems(app: IIpcEvents[EIpcOps.ADD]) {
-        if (this.appsToTimers[app.id]) {
-            clearTimeout(this.appsToTimers[app.id]);
-        }
-        this.appsToUrls[app.id] = app.url;
-        this.deriveStatus(app.id);
-    }
+		if (this.appsToUrls[appId]) {
+			delete this.appsToUrls[appId];
+		}
+	}
 
-    removeAppFromPingItems(appId: IIpcEvents[EIpcOps.REMOVE]) {
-        if (this.appsToTimers[appId]) {
-            clearTimeout(this.appsToTimers[appId]);
-            delete this.appsToTimers[appId];
-        }
+	async onWorkerMessage(message: IIpcMessage<any>) {
+		switch (message.op) {
+			case EIpcOps.DEBUG:
+				console.log(message.d);
+				break;
 
-        if (this.appsToUrls[appId]) {
-            delete this.appsToUrls[appId];
-        }
-    }
+			case EIpcOps.ADD:
+				this.addAppToPingItems(message.d);
+				break;
 
-    async onWorkerMessage(message: IIpcMessage<any>) {
-        switch (message.op) {
-            case EIpcOps.DEBUG:
-                console.log(message.d)
-                break;
+			case EIpcOps.REMOVE:
+				this.removeAppFromPingItems(message.d);
+				break;
 
-            case EIpcOps.ADD:
-                this.addAppToPingItems(message.d)
-                break;
-
-            case EIpcOps.REMOVE:
-                this.removeAppFromPingItems(message.d)
-                break;
-
-            default:
-                break;
-        }
-    }
+			default:
+				break;
+		}
+	}
 }
