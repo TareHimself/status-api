@@ -2,6 +2,7 @@ import path from 'path';
 import cluster from 'cluster';
 import { existsSync, mkdirSync } from 'fs';
 import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
 import { stat } from 'fs/promises';
 import { IStatusApp, IStatusAppPingInfo, IStatusCheck } from './types';
 
@@ -41,11 +42,11 @@ if (cluster.isPrimary) {
 	const initialStatements = [
 		`
     CREATE TABLE IF NOT EXISTS apps(
-        id TEXT NOT NULL,
+        id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         url TEXT NOT NULL,
-        UNIQUE(id)
-    );
+		email TEXT NOT NULL
+    ) WITHOUT ROWID;
     `,
 		`
     CREATE TABLE IF NOT EXISTS status(
@@ -110,16 +111,24 @@ const DeleteExpiredStatusStatement = db.prepare<{
 }>(`DELETE FROM status WHERE time < @ttl`);
 
 const GetAllAppsPingInfoStatement = db.prepare(`SELECT id,url FROM apps`);
-const GetAllAppsTrackedStatement = db.prepare(`SELECT * FROM apps`);
+const GetAllAppsTrackedStatement = db.prepare(`SELECT id,name,url FROM apps`);
 const GetTrackedAppStatement = db.prepare<Pick<IStatusApp, 'id'>>(
-	`SELECT * FROM apps WHERE id=@id`
+	`SELECT id,name,url FROM apps WHERE id=@id`
 );
 const GetAppStatusHistoryStatement = db.prepare<{ app: string; lim: number }>(
 	`SELECT state,latency,time FROM status WHERE app=@app ORDER BY time DESC LIMIT @lim`
 );
 
-const InsertAppStatement = db.prepare(
-	`INSERT INTO apps (id,name,url) VALUES(@id,@name,@url)`
+const InsertAppStatement = db.prepare<Omit<IStatusApp, 'status'>>(
+	`INSERT INTO apps (id,name,email,url) VALUES(@id,@name,@email,@url)`
+);
+
+const GetAppEmailStatement = db.prepare<{ id: string }>(
+	`SELECT email FROM apps WHERE id=@id`
+);
+
+const GetAppStatement = db.prepare<{ id: string }>(
+	`SELECT id,name,url FROM apps WHERE id=@id`
 );
 
 export function getAppsToPing() {
@@ -134,10 +143,14 @@ export function getStatusHistory(appId: string, limit: number = 10) {
 }
 
 export function getApplicationWithStatus(id: string, statusLimit: number = 10) {
-	return (GetTrackedAppStatement.all({ id: id }) as IStatusApp[]).map((app) => {
-		app.status = getStatusHistory(app.id, statusLimit);
-		return app;
-	});
+	const app = GetTrackedAppStatement.all({ id: id })[0] as
+		| IStatusApp
+		| undefined;
+	if (!app) {
+		throw new Error('App does not exist');
+	}
+	app.status = getStatusHistory(app.id, statusLimit);
+	return app;
 }
 
 export function getApplicationsWithStatus(statusLimit: number = 10) {
@@ -145,6 +158,16 @@ export function getApplicationsWithStatus(statusLimit: number = 10) {
 		app.status = getStatusHistory(app.id, statusLimit);
 		return app;
 	});
+}
+
+export function getApplication(appId: string) {
+	return GetAppStatement.all({ id: appId })[0] as IStatusApp | undefined;
+}
+
+export function getApplicationEmail(appId: string) {
+	return GetAppEmailStatement.all({ id: appId })[0]?.email as
+		| string
+		| undefined;
 }
 
 const tInsertStatus = db.transaction(
@@ -167,26 +190,47 @@ const tUpdateApplication = db.transaction(
 		const updateFields = Object.keys(fields).reduce((total, key) => {
 			return total + `${key} =@${key} `;
 		}, ' ');
-		db.prepare(`UPDATE apps SET${updateFields}WHERE id=@id`).run({
-			...fields,
-			id: id,
-		});
+		return (
+			db.prepare(`UPDATE apps SET${updateFields}WHERE id=@id`).run({
+				...fields,
+				id: id,
+			}).changes > 0
+		);
 	}
 );
 
 const tAddApplication = db.transaction(
-	(id: string, name: string, url: string) => {
-		InsertAppStatement.run({
-			id,
-			name,
-			url,
-		});
+	(config: Omit<IStatusApp, 'status' | 'id'>) => {
+		const applicationId = uuidv4();
+
+		if (
+			InsertAppStatement.run({
+				id: applicationId,
+				...config,
+			}).changes > 0
+		) {
+			return applicationId;
+		}
+
+		throw new Error('Failed to create application');
 	}
 );
 
-const tRemoveApplication = db.transaction((id: string) => {
-	db.prepare(`DELETE FROM status WHERE app=@id`).run({ id: id });
-	db.prepare(`DELETE FROM apps WHERE id=@id`).run({ id: id });
+const tRemoveApplication = db.transaction((id: string, email: string) => {
+	console.log(email, getApplicationEmail(id));
+	if (
+		getApplicationEmail(id)?.toLowerCase().trim() !== email.toLowerCase().trim()
+	) {
+		throw new Error(`Email's do not match`);
+	}
+
+	db.prepare(`DELETE FROM status WHERE app=@id`).run({
+		id: id,
+	});
+	return (
+		db.prepare(`DELETE FROM apps WHERE id=@id`).run({ id: id, email }).changes >
+		0
+	);
 });
 
 export {

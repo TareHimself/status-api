@@ -1,22 +1,37 @@
 import cluster from 'cluster';
-import express, { Application, Request as ExpressRequest, Response as ExpressResponse, } from 'express';
+import express, {
+	Application,
+	Request as ExpressRequest,
+	Response as ExpressResponse,
+} from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { tAddApplication, getAppsToPing, getStatusHistory, getApplicationsWithStatus, tUpdateApplication, getApplicationWithStatus, tRemoveApplication } from './db';
+import {
+	tAddApplication,
+	getAppsToPing,
+	getStatusHistory,
+	getApplicationsWithStatus,
+	tUpdateApplication,
+	getApplicationWithStatus,
+	tRemoveApplication,
+	getApplicationEmail,
+	getApplication,
+} from './db';
 import { EIpcOps, IIpcEvents, IIpcMessage, IStatusAppPingInfo } from './types';
 import cors from 'cors';
-
+import { buildResponse } from './utils';
+import { sendEmailToAppOwner } from './email';
 
 function sendToPingClass<T extends keyof IIpcEvents>(message: IIpcMessage<T>) {
 	if (process.send) {
-		process.send(message)
+		process.send(message);
 	}
 }
 
 function addAppToPingList(app: IStatusAppPingInfo) {
 	sendToPingClass<EIpcOps.ADD>({
 		op: EIpcOps.ADD,
-		d: app
-	})
+		d: app,
+	});
 }
 
 const app = express();
@@ -26,164 +41,117 @@ app.use(express.json());
 app.use(cors());
 
 app.get('/', (req, res) => {
-	res.send("YOLO")
-})
+	res.send('YOLO');
+});
 
 app.get('/status', (req, res) => {
 	try {
-		const maxStatusHistory = parseInt(req.query.m as string || "", 10) || 10
-		res.send({
-			success: true,
-			data: getApplicationsWithStatus(maxStatusHistory)
-		})
+		const maxStatusHistory = parseInt((req.query.m as string) || '', 10) || 10;
+		res.send(buildResponse(getApplicationsWithStatus(maxStatusHistory)));
+		return;
 	} catch (error) {
-		res.send({
-			success: false,
-			data: []
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
-
-})
+});
 
 app.get('/status/:appId', (req, res) => {
 	try {
-
-		const maxStatusHistory = parseInt(req.query.m as string || "", 10) || 10
-
-		const application = getApplicationWithStatus(req.params.appId, maxStatusHistory)[0]
-
-		if (!application) {
-			res.send({
-				success: false,
-				data: null
-			})
-			return;
-		}
-
-		res.send({
-			success: true,
-			data: application
-		})
+		const maxStatusHistory = parseInt((req.query.m as string) || '', 10) || 10;
+		res.send(
+			buildResponse(
+				getApplicationWithStatus(req.params.appId, maxStatusHistory)
+			)
+		);
+		return;
 	} catch (error) {
-		res.send({
-			success: false,
-			data: null
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
-})
+});
 
 app.get('/status/state/:appId', (req, res) => {
 	try {
-		const maxStatusHistory = parseInt(req.query.m as string || "", 10) || 10
-		res.send({
-			success: true,
-			data: getStatusHistory(req.params.appId, maxStatusHistory)
-		})
+		const maxStatusHistory = parseInt((req.query.m as string) || '', 10) || 10;
+		res.send(
+			buildResponse(getStatusHistory(req.params.appId, maxStatusHistory))
+		);
+		return;
 	} catch (error) {
-		res.send({
-			success: false,
-			data: []
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
-})
+});
 
-app.put('/status', (req, res) => {
-	const payload = req.body
-	if (!payload.name || !payload.url) {
-		res.send({
-			success: false,
-			data: 'missing fields'
-		})
-	}
-
+app.put('/status', async (req, res) => {
 	try {
-		const id = uuidv4();
+		const appId = tAddApplication(req.body);
 
-		tAddApplication(id, payload.name, payload.url);
-
-		res.send({
-			success: true,
-			data: id
-		})
-
-		addAppToPingList({ id: id, url: payload.url })
-
-		return
+		addAppToPingList({ id: appId, ...req.body });
+		res.send(buildResponse(appId));
+		await sendEmailToAppOwner(
+			appId,
+			'App Created',
+			`Your app ${req.body.name} with id ${appId} , has been created`
+		);
 	} catch (error) {
-		res.send({
-			success: false,
-			data: error.message
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
+});
 
-})
-
-app.post('/status/:appId', (req, res) => {
+app.post('/status/:appId', async (req, res) => {
 	try {
-
-		if (!req.body || !(req.body.name || req.body.url)) {
-			res.send({
-				success: false,
-				data: 'Missing fields'
-			})
-			return;
+		const didUpdate = tUpdateApplication(req.params.appId, req.body);
+		if (didUpdate && req.body.url) {
+			addAppToPingList({ id: req.params.appId, url: req.body.url });
 		}
+		res.send(buildResponse(didUpdate));
 
-		if (!Object.keys(req.body).every(a => a === "name" || a === "url")) {
-			res.send({
-				success: false,
-				data: 'One or more fields are incorrect'
-			})
-			return
+		if (didUpdate) {
+			await sendEmailToAppOwner(
+				req.params.appId,
+				'App Updated',
+				`Your app with id ${req.params.appId} , has been upated`
+			);
 		}
-
-		tUpdateApplication(req.params.appId, req.body);
-
-		if (req.body.url) {
-			addAppToPingList({ id: req.params.appId, url: req.body.url })
-		}
-
-		res.send({
-			success: true,
-			data: 'Updated'
-		})
-		return
 	} catch (error) {
-		res.send({
-			success: false,
-			data: error.message
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
+});
 
-
-})
-
-app.delete('/status/:appId', (req, res) => {
+app.delete('/status/:userId/:appId', async (req, res) => {
 	try {
-		sendToPingClass<EIpcOps.REMOVE>({
-			op: EIpcOps.REMOVE,
-			d: req.params.appId
-		})
-
-		tRemoveApplication(req.params.appId);
-
-		res.send({
-			success: true,
-			data: 'Deleted'
-		})
-		return
+		const email = req.params.userId;
+		const appInfo = getApplication(req.params.appId);
+		const didUpdate = tRemoveApplication(req.params.appId, email);
+		if (didUpdate) {
+			sendToPingClass<EIpcOps.REMOVE>({
+				op: EIpcOps.REMOVE,
+				d: req.params.appId,
+			});
+		}
+		res.send(buildResponse(didUpdate));
+		if (didUpdate && appInfo) {
+			await sendEmailToAppOwner(
+				req.params.appId,
+				'App Deleted',
+				`Your app ${appInfo.name} with id ${req.params.appId} , has been deleted`,
+				email
+			);
+		}
 	} catch (error) {
-		res.send({
-			success: false,
-			data: error.message
-		})
+		console.error(error);
+		res.send(buildResponse(error.message, true));
 	}
-})
-
+});
 
 app.listen(process.argv.includes('--debug') ? 9090 : 80, () => {
 	sendToPingClass<EIpcOps.DEBUG>({
 		op: EIpcOps.DEBUG,
-		d: `Server With ID ${process.pid}, Online`
-	})
-})
+		d: `Server With ID ${process.pid}, Online with ${
+			Object.keys(cluster.workers || {}).length
+		} workers`,
+	});
+});
