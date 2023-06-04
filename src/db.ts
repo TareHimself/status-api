@@ -165,9 +165,8 @@ export function getApplication(appId: string) {
 }
 
 export function getApplicationEmail(appId: string) {
-	return GetAppEmailStatement.all({ id: appId })[0]?.email as
-		| string
-		| undefined;
+	return (GetAppEmailStatement.all({ id: appId }) as { email: string }[])[0]
+		?.email as string | undefined;
 }
 
 const tInsertStatus = db.transaction(
