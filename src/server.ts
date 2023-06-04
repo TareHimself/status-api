@@ -147,7 +147,7 @@ app.delete('/status/:userId/:appId', async (req, res) => {
 	}
 });
 
-app.listen(process.argv.includes('--debug') ? 9090 : 80, () => {
+app.listen(process.argv.includes('--debug') ? 9090 : 9004, () => {
 	sendToPingClass<EIpcOps.DEBUG>({
 		op: EIpcOps.DEBUG,
 		d: `Server With ID ${process.pid}, Online with ${
